@@ -13,6 +13,8 @@ from langchain_pinecone import PineconeVectorStore
 from langchain.vectorstores import Pinecone
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import Document
 
 load_dotenv()
 
@@ -53,6 +55,13 @@ ENTITIES = [
     "OfficeConnect Datasheet",
     "Sales Planning Datasheet"
 ]
+
+class RetrievalCallbackHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.retrieved_docs = []
+
+    def on_retriever_end(self, documents, **kwargs):
+        self.retrieved_docs = documents
 
 def extract_text_from_docx(file):
     doc = Document(file)
@@ -172,31 +181,46 @@ def get_conversational_chain(entity):
     
     retriever = vectorstore.as_retriever(search_kwargs={"k": 2, "filter": {"entity": entity}})
     
+    retrieval_handler = RetrievalCallbackHandler()
+    
     chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         memory=memory,
-        verbose=True  # This will log the chain's operations, visible in LangSmith
+        verbose=True,  # This will log the chain's operations, visible in LangSmith
+        callbacks=[retrieval_handler]
     )
     
-    return chain
+    return chain, retrieval_handler
 
 def process_query(query, entity):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
             if 'conversation_chain' not in st.session_state:
-                st.session_state.conversation_chain = get_conversational_chain(entity)
+                st.session_state.conversation_chain, st.session_state.retrieval_handler = get_conversational_chain(entity)
             
             response = st.session_state.conversation_chain({"question": query})
             st.write(response['answer'])
             
-            # Display retrieved chunks (optional, for debugging)
-            if 'source_documents' in response:
+            # Display retrieved chunks
+            retrieved_docs = st.session_state.retrieval_handler.retrieved_docs
+            if retrieved_docs:
                 st.subheader("Retrieved Chunks:")
-                for i, doc in enumerate(response['source_documents']):
+                for i, doc in enumerate(retrieved_docs):
                     st.write(f"Chunk {i+1}:")
                     st.write(doc.page_content)
                     st.write("---")
+            
+            # Log retrieved chunks to LangSmith
+            from langsmith import Client
+            client = Client()
+            run = client.create_run(
+                name="Retrieved Chunks",
+                inputs={"query": query},
+                outputs={"retrieved_chunks": [doc.page_content for doc in retrieved_docs]},
+                tags=["retrieval"]
+            )
+            client.update_run(run, end_time=time.time())
     else:
         st.warning("Please enter a question before searching.")
 
