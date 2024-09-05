@@ -204,27 +204,17 @@ def query_pinecone(query, entity):
     query_embedding = generate_embedding(query)
     result = index.query(
         vector=query_embedding,
-        top_k=3,
+        top_k=2,  # Reduced from 3 to 2 for faster processing
         include_metadata=True,
         namespace=entity
     )
-    return [(match['metadata']['chunk_id'], match['metadata']['text'], match['metadata'].get('description', 'No description available')) for match in result['matches']]
+    return [match['metadata']['text'] for match in result['matches']]
 
 @safe_run_tree(name="get_answer", run_type="chain")
 def get_answer(context, user_query, entity):
-    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
-    system_message = SystemMessage(content=f"""
-    You are an AI assistant designed to provide accurate and specific answers based solely on the given context for the entity: {entity}. Follow these instructions strictly:
-    1. Use ONLY the information provided in the 'Content' section of each chunk in the context to answer the question.
-    2. Do not use information from the 'Description' section when formulating your answer.
-    3. If the exact answer is not in the content of the chunks, say "I don't have enough information to answer this question accurately based on the provided content for {entity}."
-    4. Do not use any external knowledge or make assumptions beyond what's explicitly stated in the content of the chunks.
-    5. If the content contains multiple relevant pieces of information, synthesize them into a coherent answer.
-    6. Be concise and to the point in your answers.
-    7. Mention that your answer is specifically based on the information available for the {entity} entity.
-    Remember, accuracy and relevance to the provided content for {entity} are paramount.
-    """)
-    human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}\n\nBased on the above context for {entity}, please answer the question using only the 'Content' sections.")
+    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)  # Changed to a faster model
+    system_message = SystemMessage(content="""You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly, Use ONLY the information provided in the context to answer the question. If the exact answer is not in the context, say "I don't have enough information to answer this question accurately." Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context. If the context contains multiple relevant pieces of information, synthesize them into a coherent answer. If the question cannot be answered based on the context, explain why, referring to what information is missing. Remember, accuracy and relevance to the provided context are paramount.""")
+    human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}")
     with get_openai_callback() as cb:
         response = chat([system_message, human_message])
     return response.content
@@ -235,12 +225,9 @@ def process_query(query, entity):
         with st.spinner(f"Searching for the best answer in {entity}..."):
             matches = query_pinecone(query, entity)
             if matches:
-                context = "\n\n".join([f"Chunk ID: {chunk_id}\nContent: {text}\nDescription: {description}" for chunk_id, text, description in matches])
+                context = "\n\n".join(matches)
                 answer = get_answer(context, query, entity)
                 st.write(answer)
-                st.subheader("Relevant Chunks:")
-                for chunk_id, _, description in matches:
-                    st.write(f"- {chunk_id}: {description}")
             else:
                 st.warning(f"No relevant information found in {entity}. Please try a different question or entity.")
     else:
