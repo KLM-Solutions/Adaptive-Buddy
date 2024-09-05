@@ -5,7 +5,6 @@ import tiktoken
 from tiktoken import get_encoding
 import os
 from dotenv import load_dotenv
-import pandas as pd
 from docx import Document
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
