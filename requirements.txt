@@ -7,5 +7,7 @@ python-docx
 langchain>=0.0.310
 langchain-openai
 langchain-community
+langchain-openai
+langchain-pinecone
 langsmith
 tqdm
