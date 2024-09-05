@@ -235,7 +235,7 @@ def process_query(query, entity):
 
 @safe_run_tree(name="main", run_type="chain")
 def main():
-    st.title("Adaptive-buddy")
+    st.title("Adaptive-Buddy")
 
     # Sidebar for file upload
     with st.sidebar:
