@@ -188,16 +188,17 @@ def process_query(query, entity):
             If the question cannot be answered based on the context, explain why, referring to what information is missing. 
             Remember, accuracy and relevance to the provided context are paramount.
 
-            Human: {human_input}
+            Context: {context}
+            Human: {question}
             AI: """
 
             prompt = PromptTemplate(
-                input_variables=["entity", "human_input"],
+                input_variables=["context", "question", "entity"],
                 template=template
             )
 
             qa_chain = RetrievalQA.from_chain_type(
-                llm=ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3),
+                llm=ChatOpenAI(model_name="gpt-4o-mini, temperature=0.3),
                 chain_type="stuff",
                 retriever=retriever,
                 chain_type_kwargs={"prompt": prompt},
@@ -209,7 +210,6 @@ def process_query(query, entity):
             st.write(result["result"])
     else:
         st.warning("Please enter a question before searching.")
-
 def main():
     st.title("Adaptive-Buddy")
 
