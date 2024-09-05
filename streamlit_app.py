@@ -8,9 +8,10 @@ from tqdm import tqdm
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.callbacks import get_openai_callback
-from langchain.chains import RetrievalQA
+from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain_core.prompts import PromptTemplate
 from langchain.callbacks import StdOutCallbackHandler
+from langchain.memory import ConversationBufferMemory
 
 load_dotenv()
 
@@ -171,48 +172,55 @@ def upsert_document(file, metadata, entity):
 
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
-def process_query(query, entity):
+def create_chain(entity):
+    retriever = vector_store.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": 2, "filter": {"entity": entity}}
+    )
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    
+    template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
+    Use ONLY the information provided in the context to answer the question. 
+    If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}." 
+    Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context. 
+    If the context contains multiple relevant pieces of information, synthesize them into a coherent answer. 
+    If the question cannot be answered based on the context, explain why, referring to what information is missing. 
+    Remember, accuracy and relevance to the provided context are paramount.
+
+    Context: {context}
+    Human: {question}
+    AI: """
+
+    prompt = PromptTemplate(
+        input_variables=["context", "question", "entity"],
+        template=template
+    )
+
+    return ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3),
+        retriever=retriever,
+        memory=memory,
+        combine_docs_chain_kwargs={"prompt": prompt},
+        return_source_documents=True,
+        callbacks=[StdOutCallbackHandler()]
+    )
+
+def process_query(query, entity, chain):
     if query:
-        st.write(entity)
         with st.spinner(f"Searching for the best answer in {entity}..."):
-            # Create a RetrievalQA chain
-            retriever = vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 2, "filter": {"entity": entity}}
-            )
-            
-            template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-            Use ONLY the information provided in the context to answer the question. 
-            If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}." 
-            Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context. 
-            If the context contains multiple relevant pieces of information, synthesize them into a coherent answer. 
-            If the question cannot be answered based on the context, explain why, referring to what information is missing. 
-            Remember, accuracy and relevance to the provided context are paramount.
-
-            Context: {context}
-            Human: {question}
-            AI: """
-
-            prompt = PromptTemplate(
-                input_variables=["context", "question", "entity"],
-                template=template
-            )
-
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3),
-                chain_type="stuff",
-                retriever=retriever,
-                chain_type_kwargs={"prompt": prompt},
-                return_source_documents=True,
-                callbacks=[StdOutCallbackHandler()]
-            )
-
-            result = qa_chain({"query": query, "entity": entity})
-            st.write(result["result"])
+            result = chain({"question": query})
+            st.write(result["answer"])
+            return result["answer"]
     else:
         st.warning("Please enter a question before searching.")
+        return None
+
 def main():
     st.title("Adaptive-Buddy")
+
+    # Initialize session state for conversation history
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = []
 
     # Sidebar for file upload
     with st.sidebar:
@@ -228,9 +236,34 @@ def main():
 
     # Main area for query interface
     query_entity = st.selectbox("Select Entity for Query", ENTITIES, key="query_entity")
-    user_query = st.text_input("Enter your question:")
-    if st.button("Get Answer"):
-        process_query(user_query, query_entity)
+    
+    # Create or get the chain for the selected entity
+    if 'chain' not in st.session_state or st.session_state.last_entity != query_entity:
+        st.session_state.chain = create_chain(query_entity)
+        st.session_state.last_entity = query_entity
+
+    # Display conversation history
+    for message in st.session_state.conversation_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input
+    user_query = st.chat_input("Ask a question about " + query_entity)
+    
+    if user_query:
+        st.session_state.conversation_history.append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.markdown(user_query)
+
+        with st.chat_message("assistant"):
+            assistant_response = process_query(user_query, query_entity, st.session_state.chain)
+            if assistant_response:
+                st.session_state.conversation_history.append({"role": "assistant", "content": assistant_response})
+
+    # Clear conversation button
+    if st.sidebar.button("Clear Conversation"):
+        st.session_state.conversation_history = []
+        st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
