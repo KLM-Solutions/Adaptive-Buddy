@@ -182,7 +182,7 @@ def query_pinecone(query, entity):
     return [match['metadata']['text'] for match in result['matches']]
 
 def get_answer(context, user_query, entity):
-    chat = ChatOpenAI(model_name="gpt-4-0613", temperature=0.3, openai_api_key=OPENAI_API_KEY)
+    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
     system_message = SystemMessage(content=f"""You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
     Use ONLY the information provided in the context to answer the question.
     If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
