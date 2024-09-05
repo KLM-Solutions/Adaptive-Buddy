@@ -235,7 +235,7 @@ def process_query(query, entity):
 
 @safe_run_tree(name="main", run_type="chain")
 def main():
-    st.title("Document Assistant")
+    st.title("Adaptive-buddy")
 
     # Sidebar for file upload
     with st.sidebar:
@@ -250,7 +250,6 @@ def main():
                         upsert_document(uploaded_file, metadata, upload_entity)
 
     # Main area for query interface
-    st.header("Query Documents")
     query_entity = st.selectbox("Select Entity for Query", ENTITIES, key="query_entity")
     user_query = st.text_input("Enter your question:")
     if st.button("Get Answer"):
