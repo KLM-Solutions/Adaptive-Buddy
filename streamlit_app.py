@@ -6,7 +6,7 @@ from tiktoken import get_encoding
 import os
 from dotenv import load_dotenv
 from docx import Document
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.callbacks import get_openai_callback
 from langchain.schema import SystemMessage, HumanMessage
