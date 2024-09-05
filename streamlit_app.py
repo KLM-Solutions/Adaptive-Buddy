@@ -149,46 +149,72 @@ def upsert_document(file, metadata, entity):
 
 def process_query(query, entity):
     if query:
-        with st.spinner(f"Searching for the best answer in {entity}..."):
-            memory = ConversationBufferMemory(
-                memory_key="chat_history",
-                input_key="question",
-                output_key="answer",
-                return_messages=True
-            )
-            
-            prompt_template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-            1. Use ONLY the information provided in the context to answer the question.
-            2. If the answer is not in the context for {entity}, say "I don't have enough information to answer accurately for {entity}."
-            3. Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
-            4. If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
-            5. If the question cannot be answered based on the context, explain why, referring to what information is missing.
-            6. Remember, accuracy and relevance to the provided context are paramount.
+        try:
+            with st.spinner(f"Searching for the best answer in {entity}..."):
+                memory = ConversationBufferMemory(
+                    memory_key="chat_history",
+                    input_key="question",
+                    output_key="answer",
+                    return_messages=True
+                )
+                
+                prompt_template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
+                1. Use ONLY the information provided in the context to answer the question.
+                2. If the answer is not in the context for {entity}, say "I don't have enough information to answer accurately for {entity}."
+                3. Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
+                4. If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
+                5. If the question cannot be answered based on the context, explain why, referring to what information is missing.
+                6. Remember, accuracy and relevance to the provided context are paramount.
 
-            Human: {question}
-            AI: Based on the context provided for {entity}, here's what I can tell you:
+                Human: {question}
+                AI: Based on the context provided for {entity}, here's what I can tell you:
 
-            {context}
+                {context}
 
-            Given this information, here's my response:
-            """
-            
-            PROMPT = PromptTemplate(
-                template=prompt_template,
-                input_variables=["context", "question", "entity"]
-            )
-            
-            chain = ConversationalRetrievalChain.from_llm(
-                llm=chat,
-                retriever=vectorstore.as_retriever(search_kwargs={"k": 2}, namespace=entity),
-                memory=memory,
-                combine_docs_chain_kwargs={"prompt": PROMPT},
-                return_source_documents=True,
-                chain_type="stuff"
-            )
-            
-            result = chain({"question": query, "entity": entity})
-            st.write(result['answer'])
+                Given this information, here's my response:
+                """
+                
+                PROMPT = PromptTemplate(
+                    template=prompt_template,
+                    input_variables=["context", "question", "entity"]
+                )
+                
+                chain = ConversationalRetrievalChain.from_llm(
+                    llm=chat,
+                    retriever=vectorstore.as_retriever(search_kwargs={"k": 2}, namespace=entity),
+                    memory=memory,
+                    combine_docs_chain_kwargs={"prompt": PROMPT},
+                    return_source_documents=True,
+                    chain_type="stuff"
+                )
+                
+                st.write("Executing chain...")
+                result = chain({"question": query, "entity": entity})
+                
+                st.write("Chain execution completed. Processing results...")
+                
+                if 'answer' in result:
+                    st.write("Answer found:")
+                    st.write(result['answer'])
+                else:
+                    st.warning("No answer was generated. Here's the raw result:")
+                    st.json(result)
+                
+                if 'source_documents' in result:
+                    st.write("Source documents:")
+                    for doc in result['source_documents']:
+                        st.write(f"- {doc.page_content[:100]}...")
+                else:
+                    st.warning("No source documents were returned.")
+                
+        except Exception as e:
+            st.error(f"An error occurred while processing the query: {str(e)}")
+            st.write("Debug information:")
+            st.write(f"Query: {query}")
+            st.write(f"Entity: {entity}")
+            st.write(f"Error type: {type(e).__name__}")
+            import traceback
+            st.code(traceback.format_exc())
     else:
         st.warning("Please enter a question before searching.")
 
