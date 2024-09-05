@@ -58,20 +58,17 @@ ENTITIES = [
     "Sales Planning Datasheet"
 ]
 
-# Define improved safe_run_tree decorator
+# Simplified safe_run_tree decorator
 def safe_run_tree(name, run_type):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             try:
-                with langsmith_client.trace(name=name, run_type=run_type) as run:
-                    result = func(*args, **kwargs)
-                    run.end(outputs={"result": str(result), "args": str(args), "kwargs": str(kwargs)})
-                    return result
+                result = func(*args, **kwargs)
+                return result
             except Exception as e:
                 error_message = f"Error in {name}: {str(e)}"
                 st.error(error_message)
-                run.end(error=error_message)
                 raise
         return wrapper
     return decorator
