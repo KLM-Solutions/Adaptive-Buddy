@@ -68,7 +68,7 @@ def generate_embedding(text):
     return embedding
 
 def generate_chunk_description(chunk):
-    chat = ChatOpenAI(model_name="gpt-40-mini, temperature=0.1, openai_api_key=OPENAI_API_KEY)
+    chat = ChatOpenAI(model_name="gpt-40-mini", temperature=0.1, openai_api_key=OPENAI_API_KEY)
     system_message = SystemMessage(content="""
     You are an AI assistant designed to create concise summaries and descriptions of text chunks stored in Pinecone. Your task is to:
     1. Provide a brief summary of the main ideas and themes in the chunk.
