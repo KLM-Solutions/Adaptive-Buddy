@@ -2,44 +2,46 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 from docx import Document
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_pinecone import PineconeVectorStore
+from langchain.callbacks import get_openai_callback
+from langchain.schema import SystemMessage, HumanMessage
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
 import re
 import time
 from tqdm import tqdm
 
-from langchain.vectorstores import Pinecone
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage, Document
-
 load_dotenv()
 
-# Initialize API keys and environment variables
+# Initialize environment variables
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 LANGCHAIN_API_KEY = st.secrets["LANGCHAIN_API_KEY"]
-PINECONE_ENVIRONMENT = st.secrets["PINECONE_ENVIRONMENT"]
+
 INDEX_NAME = "adaptive"
 
-# Set up LangSmith tracing
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
 
-# Initialize embeddings
-embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-
-# Initialize Pinecone index through LangChain
-pinecone_index = Pinecone.from_existing_index(
+# Initialize LangChain components
+embeddings = OpenAIEmbeddings()
+vectorstore = PineconeVectorStore.from_existing_index(
     index_name=INDEX_NAME,
     embedding=embeddings,
     text_key="text"
 )
 
+chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
+
 # Define the list of entities
 ENTITIES = [
     "Consolidation Infographic",
-    "Industry Use Case",
+    "Industry Use Case ",
     "Administrator Guide and User Manual",
     "Data-Entry",    
     "Integration",
@@ -63,7 +65,6 @@ def extract_text_from_docx(file):
     return paragraphs
 
 def generate_chunk_description(chunk):
-    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, openai_api_key=OPENAI_API_KEY)
     system_message = SystemMessage(content="""
     You are an AI assistant designed to create concise summaries and descriptions of text chunks stored in Pinecone. Your task is to:
     1. Provide a brief summary of the main ideas and themes in the chunk.
@@ -74,7 +75,8 @@ def generate_chunk_description(chunk):
     Your summary should give readers a clear understanding of the chunk's content without reproducing the exact text.
     """)
     human_message = HumanMessage(content=f"Please provide a concise summary and description of the following text chunk, without using direct quotes:\n\n{chunk}")
-    response = chat([system_message, human_message])
+    with get_openai_callback() as cb:
+        response = chat([system_message, human_message])
     return response.content
 
 def upsert_document(file, metadata, entity):
@@ -114,8 +116,6 @@ def upsert_document(file, metadata, entity):
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    batch_size = 100  # Adjust based on your Pinecone plan and rate limits
-    documents_to_upsert = []
     successful_upserts = 0
 
     for i, chunk in enumerate(chunks):
@@ -124,31 +124,18 @@ def upsert_document(file, metadata, entity):
             chunk_id = f"{metadata['title']}_chunk_{i}"
             chunk_metadata = {
                 'chunk_id': chunk_id,
+                'text': chunk,
                 'entity': entity,
                 'description': chunk_description
             }
 
-            # Create a Document object
-            doc = Document(page_content=chunk, metadata=chunk_metadata)
-            documents_to_upsert.append(doc)
+            # Ensure the metadata size doesn't exceed the limit
+            max_text_size = max_metadata_size - len(str({k: v for k, v in chunk_metadata.items() if k != 'text'}).encode('utf-8'))
+            if len(chunk_metadata['text'].encode('utf-8')) > max_text_size:
+                chunk_metadata['text'] = chunk_metadata['text'][:max_text_size].encode('utf-8').decode('utf-8', 'ignore')
 
-            # Batch upsert when we reach the batch size or on the last chunk
-            if len(documents_to_upsert) == batch_size or i == total_chunks - 1:
-                retry_count = 0
-                while retry_count < 3:  # Retry up to 3 times
-                    try:
-                        pinecone_index.add_documents(documents_to_upsert, namespace=entity)
-                        successful_upserts += len(documents_to_upsert)
-                        documents_to_upsert = []  # Clear the batch after successful upsert
-                        break
-                    except Exception as e:
-                        retry_count += 1
-                        st.warning(f"Upsert attempt {retry_count} failed. Retrying in 5 seconds...")
-                        time.sleep(5)
-
-                if retry_count == 3:
-                    st.error(f"Failed to upsert batch after 3 attempts. Skipping this batch.")
-                    documents_to_upsert = []  # Clear the batch to continue with next chunks
+            vectorstore.add_texts([chunk], metadatas=[chunk_metadata], ids=[chunk_id], namespace=entity)
+            successful_upserts += 1
 
             # Update progress
             progress = (i + 1) / total_chunks
@@ -160,37 +147,41 @@ def upsert_document(file, metadata, entity):
 
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
-def query_pinecone(query, entity):
-    results = pinecone_index.similarity_search_with_score(
-        query,
-        k=2,  # Reduced from 3 to 2 for faster processing
-        namespace=entity
-    )
-    return [result[0].page_content for result in results]
-
-def get_answer(context, user_query, entity):
-    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, openai_api_key=OPENAI_API_KEY)
-    system_message = SystemMessage(content=f"""You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-    Use ONLY the information provided in the context to answer the question.
-    If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
-    Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
-    If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
-    If the question cannot be answered based on the context, explain why, referring to what information is missing.
-    Remember, accuracy and relevance to the provided context are paramount.""")
-    human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}")
-    response = chat([system_message, human_message])
-    return response.content
-
 def process_query(query, entity):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
-            matches = query_pinecone(query, entity)
-            if matches:
-                context = "\n\n".join(matches)
-                answer = get_answer(context, query, entity)
-                st.write(answer)
-            else:
-                st.warning(f"No relevant information found in {entity}. Please try a different question or entity.")
+            memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+            
+            prompt_template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
+            1. Use ONLY the information provided in the context to answer the question.
+            2. If the answer is not in the context for {entity}, say "I don't have enough information to answer accurately for {entity}."
+            3. Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
+            4. If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
+            5. If the question cannot be answered based on the context, explain why, referring to what information is missing.
+            6. Remember, accuracy and relevance to the provided context are paramount.
+
+            Human: {question}
+            AI: Based on the context provided for {entity}, here's what I can tell you:
+
+            {context}
+
+            Given this information, here's my response:
+            """
+            
+            PROMPT = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context", "question", "entity"]
+            )
+            
+            chain = ConversationalRetrievalChain.from_llm(
+                llm=chat,
+                retriever=vectorstore.as_retriever(search_kwargs={"k": 2}, namespace=entity),
+                memory=memory,
+                combine_docs_chain_kwargs={"prompt": PROMPT}
+            )
+            
+            result = chain({"question": query, "entity": entity})
+            st.write(result['answer'])
     else:
         st.warning("Please enter a question before searching.")
 
