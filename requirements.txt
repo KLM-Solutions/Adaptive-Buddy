@@ -3,7 +3,6 @@ pinecone-client
 openai
 tiktoken
 python-dotenv
-pandas
 python-docx
 langchain
 langsmith
