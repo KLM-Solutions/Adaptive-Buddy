@@ -6,12 +6,13 @@ import re
 import time
 from tqdm import tqdm
 
-from langchain_openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.callbacks import get_openai_callback
 from langchain.schema import SystemMessage, HumanMessage
 from langchain_pinecone import PineconeVectorStore
 from langchain.vectorstores import Pinecone
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
 
 load_dotenv()
 
@@ -165,38 +166,29 @@ def upsert_document(file, metadata, entity):
 
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
-def query_pinecone(query, entity):
-    results = vectorstore.similarity_search(
-        query,
-        k=2,  # Reduced from 3 to 2 for faster processing
-        namespace=entity
+def get_conversational_chain(entity):
+    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 2, "filter": {"entity": entity}})
+    
+    chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        memory=memory,
+        verbose=True  # This will log the chain's operations, visible in LangSmith
     )
-    return [doc.page_content for doc in results]
-
-def get_answer(context, user_query, entity):
-    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
-    system_message = SystemMessage(content=f"""You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-    Use ONLY the information provided in the context to answer the question.
-    If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
-    Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
-    If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
-    If the question cannot be answered based on the context, explain why, referring to what information is missing.
-    Remember, accuracy and relevance to the provided context are paramount.""")
-    human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}")
-    with get_openai_callback() as cb:
-        response = chat([system_message, human_message])
-    return response.content
+    
+    return chain
 
 def process_query(query, entity):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
-            matches = query_pinecone(query, entity)
-            if matches:
-                context = "\n\n".join(matches)
-                answer = get_answer(context, query, entity)
-                st.write(answer)
-            else:
-                st.warning(f"No relevant information found in {entity}. Please try a different question or entity.")
+            if 'conversation_chain' not in st.session_state:
+                st.session_state.conversation_chain = get_conversational_chain(entity)
+            
+            response = st.session_state.conversation_chain({"question": query})
+            st.write(response['answer'])
     else:
         st.warning("Please enter a question before searching.")
 
