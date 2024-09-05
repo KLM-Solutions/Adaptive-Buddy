@@ -206,25 +206,37 @@ def process_query(query, entity):
             If the question cannot be answered based on the context, explain why, referring to what information is missing. 
             Remember, accuracy and relevance to the provided context are paramount.
 
-            Human: {human_input}
+            Context: {context}
+            Human: {question}
             AI: """
 
             prompt = PromptTemplate(
-                input_variables=["entity", "human_input"],
+                input_variables=["context", "question", "entity"],
                 template=template
             )
 
             qa_chain = RetrievalQA.from_chain_type(
-                llm=ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1),
+                llm=ChatOpenAI(model_name="gpt-4-0125-preview", temperature=0.3),
                 chain_type="stuff",
                 retriever=retriever,
-                chain_type_kwargs={"prompt": prompt}
+                chain_type_kwargs={
+                    "prompt": prompt,
+                    "document_variable_name": "context"
+                },
+                return_source_documents=True
             )
 
             result = qa_chain({"query": query, "entity": entity})
             st.write(result["result"])
+            
+            # Optionally, display source documents
+            st.write("Sources:")
+            for doc in result["source_documents"]:
+                st.write(f"- {doc.metadata.get('chunk_id', 'Unknown source')}")
+
     else:
         st.warning("Please enter a question before searching.")
+
 
 @safe_run_tree(name="main", run_type="chain")
 def main():
