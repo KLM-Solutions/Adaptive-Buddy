@@ -150,7 +150,12 @@ def upsert_document(file, metadata, entity):
 def process_query(query, entity):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
-            memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+            memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                input_key="question",
+                output_key="answer",
+                return_messages=True
+            )
             
             prompt_template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
             1. Use ONLY the information provided in the context to answer the question.
@@ -177,7 +182,9 @@ def process_query(query, entity):
                 llm=chat,
                 retriever=vectorstore.as_retriever(search_kwargs={"k": 2}, namespace=entity),
                 memory=memory,
-                combine_docs_chain_kwargs={"prompt": PROMPT}
+                combine_docs_chain_kwargs={"prompt": PROMPT},
+                return_source_documents=True,
+                chain_type="stuff"
             )
             
             result = chain({"question": query, "entity": entity})
