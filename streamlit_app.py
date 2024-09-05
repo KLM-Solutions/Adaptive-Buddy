@@ -8,11 +8,7 @@ from langchain.vectorstores import Pinecone as LangchainPinecone
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
-from langchain.callbacks import get_openai_callback
 from langchain.schema import SystemMessage, HumanMessage
-from langsmith import Client
-from langchain.callbacks.tracers import LangChainTracer
-import functools
 import re
 import time
 from tqdm import tqdm
@@ -34,18 +30,14 @@ os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
 
-# Initialize LangSmith client and tracer
-langsmith_client = Client()
-tracer = LangChainTracer(project_name="Adaptive")
-
 # Initialize Pinecone index
 if INDEX_NAME not in pc.list_indexes().names():
-    pc.create_index(name=INDEX_NAME, dimension=1536, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-east-1'))
+    pc.create_index(name=INDEX_NAME, dimension=1536, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-central1'))
 
 # Initialize LangChain components
-embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+embeddings = OpenAIEmbeddings()
 vectorstore = LangchainPinecone(pc.Index(INDEX_NAME), embeddings, "text")
-llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
+llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
 
 # Define the list of entities
 ENTITIES = [
@@ -68,22 +60,11 @@ ENTITIES = [
     "Sales Planning Datasheet"
 ]
 
-def safe_run_tree(name, run_type):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            with tracer.capture_method(name):
-                return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-@safe_run_tree(name="extract_text_from_docx", run_type="chain")
 def extract_text_from_docx(file):
     doc = Document(file)
     paragraphs = [para.text for para in doc.paragraphs]
     return paragraphs
 
-@safe_run_tree(name="generate_chunk_description", run_type="llm")
 def generate_chunk_description(chunk):
     system_message = SystemMessage(content="""
     You are an AI assistant designed to create concise summaries and descriptions of text chunks stored in Pinecone. Your task is to:
@@ -95,11 +76,9 @@ def generate_chunk_description(chunk):
     Your summary should give readers a clear understanding of the chunk's content without reproducing the exact text.
     """)
     human_message = HumanMessage(content=f"Please provide a concise summary and description of the following text chunk, without using direct quotes:\n\n{chunk}")
-    with get_openai_callback() as cb:
-        response = llm([system_message, human_message])
+    response = llm([system_message, human_message])
     return response.content
 
-@safe_run_tree(name="upsert_document", run_type="chain")
 def upsert_document(file, metadata, entity):
     paragraphs = extract_text_from_docx(file)
     chunks = []
@@ -168,7 +147,6 @@ def upsert_document(file, metadata, entity):
 
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
-@safe_run_tree(name="process_query", run_type="chain")
 def process_query(query, entity):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
@@ -207,7 +185,6 @@ def process_query(query, entity):
     else:
         st.warning("Please enter a question before searching.")
 
-@safe_run_tree(name="main", run_type="chain")
 def main():
     st.title("Adaptive-Buddy")
 
