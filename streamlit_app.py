@@ -9,12 +9,7 @@ from tqdm import tqdm
 from langchain.vectorstores import Pinecone
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.callbacks import get_openai_callback
-from langchain.schema import (
-    SystemMessage,
-    HumanMessage,
-    Document
-)
+from langchain.schema import SystemMessage, HumanMessage, Document
 
 load_dotenv()
 
@@ -22,21 +17,23 @@ load_dotenv()
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 LANGCHAIN_API_KEY = st.secrets["LANGCHAIN_API_KEY"]
+PINECONE_ENVIRONMENT = st.secrets["PINECONE_ENVIRONMENT"]
 INDEX_NAME = "adaptive"
 
 # Set up LangSmith tracing
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
-PINECONE_ENVIRONMENT = "us-east-1"  
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
 
-# Initialize embeddings and Pinecone index
+# Initialize embeddings
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+
+# Initialize Pinecone index through LangChain
 pinecone_index = Pinecone.from_existing_index(
     index_name=INDEX_NAME,
     embedding=embeddings,
-    environment=PINECONE_ENVIRONMENT
+    text_key="text"
 )
 
 # Define the list of entities
