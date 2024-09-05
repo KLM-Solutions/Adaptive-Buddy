@@ -1,26 +1,26 @@
 import streamlit as st
-from pinecone import Pinecone, ServerlessSpec
-import os
 from dotenv import load_dotenv
 from docx import Document
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.vectorstores import Pinecone as LangchainPinecone
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
-from langchain.schema import SystemMessage, HumanMessage
+import os
 import re
 import time
 from tqdm import tqdm
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_pinecone import PineconeVectorStore
+from langchain.callbacks import get_openai_callback
+from langchain.chains import ConversationalRetrievalChain
+from langchain_core.prompts import PromptTemplate
+from langchain.callbacks import StdOutCallbackHandler
+from langchain.memory import ConversationBufferMemory
+from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-# Initialize Pinecone
+# Initialize environment variables
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 LANGCHAIN_API_KEY = st.secrets["LANGCHAIN_API_KEY"]
 
-pc = Pinecone(api_key=PINECONE_API_KEY)
 INDEX_NAME = "adaptive"
 
 # Set environment variables for LangSmith
@@ -30,14 +30,21 @@ os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
 
-# Initialize Pinecone index
-if INDEX_NAME not in pc.list_indexes().names():
-    pc.create_index(name=INDEX_NAME, dimension=1536, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-central1'))
+# Initialize Pinecone
+pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Initialize LangChain components
+# Create Pinecone index if it doesn't exist
+if INDEX_NAME not in pc.list_indexes().names():
+    pc.create_index(
+        name=INDEX_NAME,
+        dimension=1536,
+        metric='cosine',
+        spec=ServerlessSpec(cloud='aws', region='us-east-1')
+    )
+
+# Initialize Pinecone and OpenAI with Langchain
 embeddings = OpenAIEmbeddings()
-vectorstore = LangchainPinecone(pc.Index(INDEX_NAME), embeddings, "text")
-llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
+vector_store = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
 
 # Define the list of entities
 ENTITIES = [
@@ -66,7 +73,8 @@ def extract_text_from_docx(file):
     return paragraphs
 
 def generate_chunk_description(chunk):
-    system_message = SystemMessage(content="""
+    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
+    system_message = """
     You are an AI assistant designed to create concise summaries and descriptions of text chunks stored in Pinecone. Your task is to:
     1. Provide a brief summary of the main ideas and themes in the chunk.
     2. Describe the key topics and concepts covered, without directly quoting the text.
@@ -74,9 +82,16 @@ def generate_chunk_description(chunk):
     4. Avoid mentioning any document names or titles in your description.
     5. Keep your response maximum 150 words to ensure it's concise yet informative.
     Your summary should give readers a clear understanding of the chunk's content without reproducing the exact text.
-    """)
-    human_message = HumanMessage(content=f"Please provide a concise summary and description of the following text chunk, without using direct quotes:\n\n{chunk}")
-    response = llm([system_message, human_message])
+    """
+    human_message = f"Please provide a concise summary and description of the following text chunk, without using direct quotes:\n\n{chunk}"
+    
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": human_message}
+    ]
+    
+    with get_openai_callback() as cb:
+        response = chat(messages)
     return response.content
 
 def upsert_document(file, metadata, entity):
@@ -116,6 +131,8 @@ def upsert_document(file, metadata, entity):
     progress_bar = st.progress(0)
     status_text = st.empty()
 
+    batch_size = 100  # Adjust based on your Pinecone plan and rate limits
+    vectors_to_upsert = []
     successful_upserts = 0
 
     for i, chunk in enumerate(chunks):
@@ -134,8 +151,29 @@ def upsert_document(file, metadata, entity):
             if len(chunk_metadata['text'].encode('utf-8')) > max_text_size:
                 chunk_metadata['text'] = chunk_metadata['text'][:max_text_size].encode('utf-8').decode('utf-8', 'ignore')
 
-            vectorstore.add_texts([chunk], metadatas=[chunk_metadata], ids=[chunk_id], namespace=entity)
-            successful_upserts += 1
+            vectors_to_upsert.append((chunk_id, chunk, chunk_metadata))
+
+            # Batch upsert when we reach the batch size or on the last chunk
+            if len(vectors_to_upsert) == batch_size or i == total_chunks - 1:
+                retry_count = 0
+                while retry_count < 3:  # Retry up to 3 times
+                    try:
+                        vector_store.add_texts(
+                            texts=[v[1] for v in vectors_to_upsert],
+                            metadatas=[v[2] for v in vectors_to_upsert],
+                            ids=[v[0] for v in vectors_to_upsert]
+                        )
+                        successful_upserts += len(vectors_to_upsert)
+                        vectors_to_upsert = []  # Clear the batch after successful upsert
+                        break
+                    except Exception as e:
+                        retry_count += 1
+                        st.warning(f"Upsert attempt {retry_count} failed. Retrying in 5 seconds...")
+                        time.sleep(5)
+
+                if retry_count == 3:
+                    st.error(f"Failed to upsert batch after 3 attempts. Skipping this batch.")
+                    vectors_to_upsert = []  # Clear the batch to continue with next chunks
 
             # Update progress
             progress = (i + 1) / total_chunks
@@ -147,46 +185,55 @@ def upsert_document(file, metadata, entity):
 
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
-def process_query(query, entity):
+def create_chain(entity):
+    retriever = vector_store.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": 2, "filter": {"entity": entity}}
+    )
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, input_key="question")
+    
+    template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
+    Use ONLY the information provided in the context to answer the question. 
+    If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}." 
+    Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context. 
+    If the context contains multiple relevant pieces of information, synthesize them into a coherent answer. 
+    If the question cannot be answered based on the context, explain why, referring to what information is missing. 
+    Remember, accuracy and relevance to the provided context are paramount.
+
+    Context: {context}
+    Human: {question}
+    AI: """
+
+    prompt = PromptTemplate(
+        input_variables=["context", "question", "entity"],
+        template=template
+    )
+
+    return ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(model_name="gpt-4-0125-preview", temperature=0.3),
+        retriever=retriever,
+        memory=memory,
+        combine_docs_chain_kwargs={"prompt": prompt},
+        return_source_documents=True,
+        callbacks=[StdOutCallbackHandler()]
+    )
+
+def process_query(query, entity, chain):
     if query:
         with st.spinner(f"Searching for the best answer in {entity}..."):
-            memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-            
-            prompt_template = """You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-            1. Use ONLY the information provided in the context to answer the question.
-            2. If the answer is not in the context for {entity}, say "I don't have enough information to answer accurately for {entity}."
-            3. Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
-            4. If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
-            5. If the question cannot be answered based on the context, explain why, referring to what information is missing.
-            6. Remember, accuracy and relevance to the provided context are paramount.
-
-            Human: {question}
-            AI: Based on the context provided for {entity}, here's what I can tell you:
-
-            {context}
-
-            Given this information, here's my response:
-            """
-            
-            PROMPT = PromptTemplate(
-                template=prompt_template,
-                input_variables=["context", "question", "entity"]
-            )
-            
-            chain = ConversationalRetrievalChain.from_llm(
-                llm=llm,
-                retriever=vectorstore.as_retriever(search_kwargs={"k": 2}, namespace=entity),
-                memory=memory,
-                combine_docs_chain_kwargs={"prompt": PROMPT}
-            )
-            
-            result = chain({"question": query, "entity": entity})
-            st.write(result['answer'])
+            result = chain({"question": query})
+            st.write(result["answer"])
+            return result["answer"]
     else:
         st.warning("Please enter a question before searching.")
+        return None
 
 def main():
     st.title("Adaptive-Buddy")
+
+    # Initialize session state for conversation history
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = []
 
     # Sidebar for file upload
     with st.sidebar:
@@ -202,9 +249,34 @@ def main():
 
     # Main area for query interface
     query_entity = st.selectbox("Select Entity for Query", ENTITIES, key="query_entity")
-    user_query = st.text_input("Enter your question:")
-    if st.button("Get Answer"):
-        process_query(user_query, query_entity)
+    
+    # Create or get the chain for the selected entity
+    if 'chain' not in st.session_state or st.session_state.last_entity != query_entity:
+        st.session_state.chain = create_chain(query_entity)
+        st.session_state.last_entity = query_entity
+
+    # Display conversation history
+    for message in st.session_state.conversation_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input
+    user_query = st.chat_input("Ask a question about " + query_entity)
+    
+    if user_query:
+        st.session_state.conversation_history.append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.markdown(user_query)
+
+        with st.chat_message("assistant"):
+            assistant_response = process_query(user_query, query_entity, st.session_state.chain)
+            if assistant_response:
+                st.session_state.conversation_history.append({"role": "assistant", "content": assistant_response})
+
+    # Clear conversation button
+    if st.sidebar.button("Clear Conversation"):
+        st.session_state.conversation_history = []
+        st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
