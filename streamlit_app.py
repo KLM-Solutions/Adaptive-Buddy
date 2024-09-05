@@ -221,12 +221,18 @@ def process_query(query, entity):
                 retriever=retriever,
                 chain_type_kwargs={
                     "prompt": prompt,
-                    "document_variable_name": "context"
                 },
                 return_source_documents=True
             )
 
-            result = qa_chain({"query": query, "entity": entity})
+            # Prepare the input dictionary
+            input_dict = {
+                "query": query,
+                "entity": entity,
+            }
+
+            result = qa_chain(input_dict)
+            
             st.write(result["result"])
             
             # Optionally, display source documents
@@ -236,7 +242,6 @@ def process_query(query, entity):
 
     else:
         st.warning("Please enter a question before searching.")
-
 
 @safe_run_tree(name="main", run_type="chain")
 def main():
