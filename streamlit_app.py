@@ -22,7 +22,6 @@ load_dotenv()
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 LANGCHAIN_API_KEY = st.secrets["LANGCHAIN_API_KEY"]
-PINECONE_ENVIRONMENT = st.secrets["PINECONE_ENVIRONMENT"]
 INDEX_NAME = "adaptive"
 
 # Set up LangSmith tracing
@@ -36,7 +35,7 @@ embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 pinecone_index = Pinecone.from_existing_index(
     index_name=INDEX_NAME,
     embedding=embeddings,
-    environment=PINECONE_ENVIRONMENT
+    environment="us-east-1"
 )
 
 # Define the list of entities
