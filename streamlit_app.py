@@ -28,6 +28,7 @@ INDEX_NAME = "adaptive"
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
+PINECONE_ENVIRONMENT = "us-east-1"  
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
 
 # Initialize embeddings and Pinecone index
@@ -35,7 +36,7 @@ embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 pinecone_index = Pinecone.from_existing_index(
     index_name=INDEX_NAME,
     embedding=embeddings,
-    environment="us-east-1"
+    environment=PINECONE_ENVIRONMENT
 )
 
 # Define the list of entities
