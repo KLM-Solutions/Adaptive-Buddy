@@ -227,6 +227,7 @@ def main():
 
     # Main area for query interface
     query_entity = st.selectbox("Select Entity for Query", ENTITIES, key="query_entity")
+    st.write(query_entity)
     user_query = st.text_input("Enter your question:")
     if st.button("Get Answer"):
         process_query(user_query, query_entity)
