@@ -36,7 +36,7 @@ vectorstore = PineconeVectorStore.from_existing_index(
     text_key="text"
 )
 
-chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
+chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1)
 
 # Define the list of entities
 ENTITIES = [
