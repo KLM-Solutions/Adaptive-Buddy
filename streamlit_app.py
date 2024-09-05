@@ -13,6 +13,9 @@ from langchain_pinecone import PineconeVectorStore
 from langchain.vectorstores import Pinecone
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.callbacks import StdOutCallbackHandler
+from langchain.callbacks.tracers import ConsoleCallbackHandler, LangChainTracer
+from langchain.callbacks.manager import CallbackManager
 
 load_dotenv()
 
@@ -28,6 +31,11 @@ os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["LANGCHAIN_PROJECT"] = "Adaptive"
+
+# Initialize LangSmith tracer
+tracer = LangChainTracer()
+handler = ConsoleCallbackHandler()
+callback_manager = CallbackManager([tracer, handler])
 
 # Initialize Pinecone using Langchain
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
@@ -118,32 +126,34 @@ def upsert_document(file, metadata, entity):
 
     for i, chunk in enumerate(chunks):
         try:
-            chunk_description = generate_chunk_description(chunk)
-            chunk_id = f"{metadata['title']}_chunk_{i}"
-            chunk_metadata = {
-                'chunk_id': chunk_id,
-                'text': chunk,
-                'entity': entity,
-                'description': chunk_description
-            }
+            with tracer.start_trace(run_name=f"Process Chunk {i+1}"):
+                chunk_description = generate_chunk_description(chunk)
+                chunk_id = f"{metadata['title']}_chunk_{i}"
+                chunk_metadata = {
+                    'chunk_id': chunk_id,
+                    'text': chunk,
+                    'entity': entity,
+                    'description': chunk_description
+                }
 
-            # Ensure the metadata size doesn't exceed the limit
-            max_text_size = max_metadata_size - len(str({k: v for k, v in chunk_metadata.items() if k != 'text'}).encode('utf-8'))
-            if len(chunk_metadata['text'].encode('utf-8')) > max_text_size:
-                chunk_metadata['text'] = chunk_metadata['text'][:max_text_size].encode('utf-8').decode('utf-8', 'ignore')
+                # Ensure the metadata size doesn't exceed the limit
+                max_text_size = max_metadata_size - len(str({k: v for k, v in chunk_metadata.items() if k != 'text'}).encode('utf-8'))
+                if len(chunk_metadata['text'].encode('utf-8')) > max_text_size:
+                    chunk_metadata['text'] = chunk_metadata['text'][:max_text_size].encode('utf-8').decode('utf-8', 'ignore')
 
-            vectors_to_upsert.append((chunk, chunk_metadata))
+                vectors_to_upsert.append((chunk, chunk_metadata))
 
             # Batch upsert when we reach the batch size or on the last chunk
             if len(vectors_to_upsert) == batch_size or i == total_chunks - 1:
                 retry_count = 0
                 while retry_count < 3:  # Retry up to 3 times
                     try:
-                        vectorstore.add_texts(
-                            texts=[v[0] for v in vectors_to_upsert],
-                            metadatas=[v[1] for v in vectors_to_upsert],
-                            namespace=entity
-                        )
+                        with tracer.start_trace(run_name=f"Upsert Batch {i//batch_size + 1}"):
+                            vectorstore.add_texts(
+                                texts=[v[0] for v in vectors_to_upsert],
+                                metadatas=[v[1] for v in vectors_to_upsert],
+                                namespace=entity
+                            )
                         successful_upserts += len(vectors_to_upsert)
                         vectors_to_upsert = []  # Clear the batch after successful upsert
                         break
@@ -167,16 +177,25 @@ def upsert_document(file, metadata, entity):
     st.success(f"Document '{metadata['title']}' processing completed. {successful_upserts} out of {total_chunks} chunks successfully upserted for entity '{entity}'.")
 
 def get_conversational_chain(entity):
-    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
+    llm = ChatOpenAI(
+        model_name="gpt-4o-mini", 
+        temperature=0.3, 
+        openai_api_key=OPENAI_API_KEY,
+        callbacks=[handler]  # Add callback for LLM
+    )
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
     
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 2, "filter": {"entity": entity}})
+    retriever = vectorstore.as_retriever(
+        search_kwargs={"k": 2, "filter": {"entity": entity}},
+        callbacks=[handler]  # Add callback for retriever
+    )
     
     chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         memory=memory,
-        verbose=True  # This will log the chain's operations, visible in LangSmith
+        verbose=True,  # This will log the chain's operations, visible in LangSmith
+        callback_manager=callback_manager  # Add callback manager to the chain
     )
     
     return chain
@@ -187,8 +206,18 @@ def process_query(query, entity):
             if 'conversation_chain' not in st.session_state:
                 st.session_state.conversation_chain = get_conversational_chain(entity)
             
-            response = st.session_state.conversation_chain({"question": query})
+            # Use a run name that includes the entity for better organization in LangSmith
+            with tracer.start_trace(run_name=f"Query for {entity}"):
+                response = st.session_state.conversation_chain({"question": query})
             st.write(response['answer'])
+            
+            # Display retrieved chunks (optional, for debugging)
+            if 'source_documents' in response:
+                st.subheader("Retrieved Chunks:")
+                for i, doc in enumerate(response['source_documents']):
+                    st.write(f"Chunk {i+1}:")
+                    st.write(doc.page_content)
+                    st.write("---")
     else:
         st.warning("Please enter a question before searching.")
 
@@ -205,7 +234,8 @@ def main():
                 for uploaded_file in uploaded_files:
                     with st.spinner(f"Processing {uploaded_file.name}..."):
                         metadata = {"title": uploaded_file.name}
-                        upsert_document(uploaded_file, metadata, upload_entity)
+                        with tracer.start_trace(run_name=f"Document Upload - {upload_entity}"):
+                            upsert_document(uploaded_file, metadata, upload_entity)
 
     # Main area for query interface
     query_entity = st.selectbox("Select Entity for Query", ENTITIES, key="query_entity")
