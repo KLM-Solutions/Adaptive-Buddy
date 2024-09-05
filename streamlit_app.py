@@ -198,7 +198,7 @@ def process_query(query, entity):
             )
 
             qa_chain = RetrievalQA.from_chain_type(
-                llm=ChatOpenAI(model_name="gpt-4o-mini, temperature=0.3),
+                llm=ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3),
                 chain_type="stuff",
                 retriever=retriever,
                 chain_type_kwargs={"prompt": prompt},
