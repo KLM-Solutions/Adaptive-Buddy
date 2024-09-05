@@ -4,7 +4,7 @@ openai
 tiktoken
 python-dotenv
 python-docx
-langchain>=0.0.310
+langchain
 langchain-openai
 langchain-community
 langchain-openai
