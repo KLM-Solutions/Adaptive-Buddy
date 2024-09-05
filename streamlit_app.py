@@ -13,6 +13,7 @@ from langchain_pinecone import PineconeVectorStore
 from langchain.vectorstores import Pinecone
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.callbacks import StreamlitCallbackHandler
 
 load_dotenv()
 
@@ -176,6 +177,7 @@ def get_conversational_chain(entity):
         llm=llm,
         retriever=retriever,
         memory=memory,
+        return_source_documents=True,  # This will return the source documents
         verbose=True  # This will log the chain's operations, visible in LangSmith
     )
     
@@ -187,8 +189,24 @@ def process_query(query, entity):
             if 'conversation_chain' not in st.session_state:
                 st.session_state.conversation_chain = get_conversational_chain(entity)
             
-            response = st.session_state.conversation_chain({"question": query})
-            st.write(response['answer'])
+            # Use StreamlitCallbackHandler for real-time updates
+            streamlit_handler = StreamlitCallbackHandler(st.container())
+            
+            response = st.session_state.conversation_chain(
+                {"question": query},
+                callbacks=[streamlit_handler]
+            )
+            
+            # Display the answer
+            st.write("Answer:", response['answer'])
+            
+            # Display the source chunks
+            st.write("Source Chunks:")
+            for i, doc in enumerate(response['source_documents']):
+                st.write(f"Chunk {i+1}:")
+                st.write(doc.page_content)
+                st.write("Metadata:", doc.metadata)
+                st.write("---")
     else:
         st.warning("Please enter a question before searching.")
 
