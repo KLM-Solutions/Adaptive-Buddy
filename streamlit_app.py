@@ -175,7 +175,7 @@ def query_pinecone(query, entity):
     query_embedding = generate_embedding(query)
     result = index.query(
         vector=query_embedding,
-        top_k=2,  # Reduced from 3 to 2 for faster processing
+        top_k=3,  
         include_metadata=True,
         namespace=entity
     )
