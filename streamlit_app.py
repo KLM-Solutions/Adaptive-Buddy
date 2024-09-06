@@ -182,14 +182,15 @@ def query_pinecone(query, entity):
     return [match['metadata']['text'] for match in result['matches']]
 
 def get_answer(context, user_query, entity):
-    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, openai_api_key=OPENAI_API_KEY)
-    system_message = SystemMessage(content=f"""You are an AI assistant designed to provide accurate and specific answers based solely on the given context. Follow these instructions strictly:
-    Use ONLY the information provided in the context to answer the question.
-    If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
-    Do not use any external knowledge or make assumptions beyond what's explicitly stated in the context.
-    If the context contains multiple relevant pieces of information, synthesize them into a coherent answer.
-    If the question cannot be answered based on the context, explain why, referring to what information is missing.
-    Remember, accuracy and relevance to the provided context are paramount.""")
+    chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)  # Changed to a faster model
+    system_message = SystemMessage(content="""You are an AI assistant specializing in providing information based on the given context.
+Your task is to answer the user's query using only the provided context related to the chosen {entity}.
+Do not use information from other entities or sources.
+Ensure your response is accurate, relevant, and concise.
+Provide only the necessary answer without including the entire context.   
+Remember, accuracy and relevance to the provided context are paramount.     
+If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
+""")
     human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}")
     with get_openai_callback() as cb:
         response = chat([system_message, human_message])
