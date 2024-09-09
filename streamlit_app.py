@@ -188,9 +188,7 @@ Your task is to answer the user's query using only the provided context related 
 Do not use information from other entities or sources.
 Ensure your response is accurate, relevant, and concise.
 Provide only the necessary answer without including the entire context.   
-Remember, accuracy and relevance to the provided context are paramount.     
-If the answer is not in the {entity}, say "I don't have enough information to answer accurately for {entity}."
-""")
+Remember, accuracy and relevance to the provided context are paramount.""")
     human_message = HumanMessage(content=f"Context: {context}\n\nQuestion: {user_query}")
     with get_openai_callback() as cb:
         response = chat([system_message, human_message])
